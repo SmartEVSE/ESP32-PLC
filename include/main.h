@@ -42,7 +42,8 @@
 #define SLAC_PARAM_CNF 20
 #define MNBC_SOUND 30
 #define ATTEN_CHAR_IND 40
-
+#define ATTEN_CHAR_RSP 50
+#define SLAC_MATCH_REQ 60
 
 
 #define CM_SET_KEY 0x6008

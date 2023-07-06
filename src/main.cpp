@@ -278,17 +278,46 @@ void composeSlacParamCnf() {
     buffer[18]=0x00; // 
     buffer[19]=0x00; // apptype
     buffer[20]=0x00; // security
-    setMacAt(pevMac, 21); // The wireshark calls it source_mac, but alpitronic fills it with PEV mac. We use the PEV MAC.
-    setRunId(27); // runid 8 bytes 
-    buffer[35]=0x00; //35 - 51 source_id, 17 bytes. The alpitronic fills it with 00
+    setMacAt(pevMac, 21); // Mac address of the EV Host which initiates the SLAC process
+    setRunId(27); // RunId 8 bytes 
+    buffer[35]=0x00; // 35 - 51 source_id, 17 bytes 0x00 (defined in ISO15118-3 table A.4)
         
-    buffer[52]=0x00; // 52 - 68 response_id, 17 bytes. The alpitronic fills it with 00.
+    buffer[52]=0x00; // 52 - 68 response_id, 17 bytes 0x00. (defined in ISO15118-3 table A.4)
     
     buffer[69]=ReceivedSounds; // Number of sounds. 10 in normal case. 
-    buffer[70]=0x3A; // Number of groups = 58. Should this be more flexible?
-    
+    buffer[70]=0x3A; // Number of groups = 58. (defined in ISO15118-3 table A.4)
     setACVarField(71); // 71 to 128: The group attenuation for the 58 announced groups.
  }
+
+
+void composeSlacMatchCnf() {
+    
+    memset(buffer,0x00,109);  // clear buffer
+    setMacAt(pevMac, 0);  // Destination MAC
+    setMacAt(myMac, 6);  // Source MAC
+    buffer[12]=0x88; // Protocol HomeplugAV
+    buffer[13]=0xE1;
+    buffer[14]=0x01; // version
+    buffer[15]=0x7D; // SLAC_MATCH.CNF
+    buffer[16]=0x60; // 
+    buffer[17]=0x00; // 2 bytes fragmentation information. 0000 means: unfragmented.
+    buffer[18]=0x00; // 
+    buffer[19]=0x00; // apptype
+    buffer[20]=0x00; // security
+    buffer[21]=0x56; // length 2 byte
+    buffer[22]=0x00;  
+                          // 23 - 39: pev_id 17 bytes. All zero.
+    setMacAt(pevMac, 40); // Pev Mac address
+                          // 46 - 62: evse_id 17 bytes. All zero.
+    setMacAt(myMac, 63);  // 63 - 68 evse_mac 
+    setRunId(69);         // runid 8 bytes 69-76 run_id.
+                          // 77 to 84 reserved 0
+    setNidAt(85);         // 85-91 NID. We can nearly freely choose this, but the upper two bits need to be zero
+                          // 92 reserved 0                                 
+    setNmkAt(93);         // 93 to 108 NMK. We can freely choose this. Normally we should use a random number. 
+}        
+
+
 
 // Task
 // 
@@ -335,6 +364,8 @@ void Timer20ms(void * parameter) {
       case SLAC_PARAM_CNF:
       case MNBC_SOUND:
       case ATTEN_CHAR_IND:
+      case ATTEN_CHAR_RSP:
+      case SLAC_MATCH_REQ:
         reg16 = qcaspi_read_burst(rxbuffer);
 
         while (reg16) {
@@ -394,9 +425,28 @@ void Timer20ms(void * parameter) {
                 for (x=0; x<58; x++) AvgACVar[x] = AvgACVar[x] / ReceivedSounds;
               }  
 
-            } 
+            } else if (mnt == (CM_ATTEN_CHAR + MMTYPE_RSP) && modem_state == ATTEN_CHAR_IND) { 
+              Serial.printf("received CM_ATTEN_CHAR.RSP\n");
+              // verify pevMac, RunID, and succesful Slac fields
+              if (memcmp(pevMac, rxbuffer+21, 6) == 0 && memcmp(pevRunId, rxbuffer+27, 8) == 0 && rxbuffer[69] == 0) {
+                Serial.printf("Successful SLAC process\n");
+                modem_state = ATTEN_CHAR_RSP;
+              } else modem_state = MODEM_CONFIGURED; // probably not correct, should ignore data, and retransmit CM_ATTEN_CHAR.IND
 
-            //Serial.printf("remaining reg16: %i\n",(int16_t)reg16-rxbytes-14);
+            } else if (mnt == (CM_SLAC_MATCH + MMTYPE_REQ) && modem_state == ATTEN_CHAR_RSP) { 
+              Serial.printf("received CM_SLAC_MATCH.REQ\n"); 
+              // Verify pevMac, RunID and MVFLength fields
+              if (memcmp(pevMac, rxbuffer+40, 6) == 0 && memcmp(pevRunId, rxbuffer+69, 8) == 0 && rxbuffer[21] == 0x3e) {
+                Serial.printf("OK\n");
+                modem_state = SLAC_MATCH_REQ;
+                composeSlacMatchCnf();
+                // Send data to modem
+                qcaspi_write_burst(buffer, 109);
+                Serial.printf("transmitting CM_SLAC_MATCH.CNF\n");
+              }
+            }
+
+
             // there might be more data still in the buffer. Check if there is another packet.
             if ((int16_t)reg16-rxbytes-14 >= 74) {
               reg16 = reg16-rxbytes-14;
