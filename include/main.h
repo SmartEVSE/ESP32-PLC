@@ -27,11 +27,22 @@
 
 #define QCASPI_GOOD_SIGNATURE   0xAA55
 
+#define SPI_INT_WRBUF_BELOW_WM (1 << 10)
+#define SPI_INT_CPU_ON         (1 << 6)
+#define SPI_INT_ADDR_ERR       (1 << 3)
+#define SPI_INT_WRBUF_ERR      (1 << 2)
+#define SPI_INT_RDBUF_ERR      (1 << 1)
+#define SPI_INT_PKT_AVLBL      (1 << 0)
+
 #define MODEM_POWERUP 0
 #define MODEM_WRITESPACE 1
 #define MODEM_CM_SET_KEY_REQ 2
 #define MODEM_CM_SET_KEY_CNF 3
 #define MODEM_CONFIGURED 10
+#define SLAC_PARAM_CNF 20
+#define MNBC_SOUND 30
+#define ATTEN_CHAR_IND 40
+
 
 
 #define CM_SET_KEY 0x6008

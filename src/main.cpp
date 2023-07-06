@@ -32,14 +32,48 @@
 #include "main.h"
 
 
-uint16_t available;
 uint8_t buffer[3164], rxbuffer[3164];
 uint8_t modem_state;
-uint8_t evseMac[6] = {0x55, 0x56, 0x57, 0xAA, 0xAA, 0xAA};  // a default evse MAC. Will be overwritten later.
+uint8_t myMac[6] = {0x55, 0x56, 0x57, 0xAA, 0xAA, 0xAA};  // a default evse MAC. Will be overwritten later.
+uint8_t pevMac[6] = {0xDC, 0x0E, 0xA1, 0x11, 0x67, 0x08};   //a default pev MAC. Will be overwritten later.
+uint8_t pevRunId[8] = {0xDC, 0x0E, 0xA1, 0xDE, 0xAD, 0xBE, 0xEF, 0x55}; //a default pev RunId. Will be overwritten later.
+uint16_t AvgACVar[58]; // Average AC Variable Field. (used in CM_ATTEN_PROFILE.IND)
 uint8_t NMK[] = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16}; // a default network key. Will be overwritten later.
 uint8_t NMK_EVSE[] = {0x77, 0x77, 0x77, 0x77, 0x77, 0x77, 0x77, 0x77, 0x77, 0x77, 0x77, 0x77, 0x77, 0x77, 0x77, 0x77}; // In EvseMode, we use this key.
 uint8_t NID[] = {1, 2, 3, 4, 5, 6, 7}; // a default network ID
+unsigned long SoundsTimer = 0;
+uint8_t ReceivedSounds = 0;
 
+void SPI_InterruptHandler() {
+
+    volatile uint16_t rx_data;
+
+    // Write zero into the SPI_REG_INTR_ENABLE register
+    digitalWrite(PIN_QCA700X_CS, LOW);
+    SPI.transfer16(QCA7K_SPI_WRITE | QCA7K_SPI_INTERNAL | SPI_REG_INTR_ENABLE);
+    SPI.transfer16(0);                  // write the value to the bus
+    digitalWrite(PIN_QCA700X_CS, HIGH);
+    // Read the Interrupt Cause register
+    digitalWrite(PIN_QCA700X_CS, LOW);
+    SPI.transfer16(QCA7K_SPI_READ | QCA7K_SPI_INTERNAL | SPI_REG_INTR_CAUSE);
+    rx_data = SPI.transfer16(0x0000);   // read the reason of the interrrupt
+    digitalWrite(PIN_QCA700X_CS, HIGH);
+    // Write contents back to Interrupt Cause register
+    digitalWrite(PIN_QCA700X_CS, LOW);
+    SPI.transfer16(QCA7K_SPI_WRITE | QCA7K_SPI_INTERNAL | SPI_REG_INTR_CAUSE);
+    SPI.transfer16(rx_data);   
+    digitalWrite(PIN_QCA700X_CS, HIGH);
+
+    
+
+
+    // Re-enable Packet Available interrupt
+    digitalWrite(PIN_QCA700X_CS, LOW);
+    SPI.transfer16(QCA7K_SPI_WRITE | QCA7K_SPI_INTERNAL | SPI_REG_INTR_ENABLE);
+    SPI.transfer16(SPI_INT_PKT_AVLBL);   
+    digitalWrite(PIN_QCA700X_CS, HIGH);
+
+}
 
 
 
@@ -70,7 +104,7 @@ void qcaspi_write_register(uint16_t reg, uint16_t value) {
 }
 
 void qcaspi_write_burst(uint8_t *src, uint32_t len) {
-    uint16_t cmd, total_len;
+    uint16_t total_len;
     uint8_t buf[10];
 
     buf[0] = 0xAA;
@@ -89,11 +123,9 @@ void qcaspi_write_burst(uint8_t *src, uint32_t len) {
 
     for(int x=0; x< len; x++) Serial.printf("%02x ",src[x]);
     Serial.printf("\n");
-
-    cmd = QCA7K_SPI_WRITE | QCA7K_SPI_EXTERNAL;
-
+    
     digitalWrite(PIN_QCA700X_CS, LOW);
-    SPI.transfer16(cmd);      // Write External
+    SPI.transfer16(QCA7K_SPI_WRITE | QCA7K_SPI_EXTERNAL);      // Write External
     SPI.transfer(buf, 8);     // Header
     SPI.transfer(src, len);   // Data
     SPI.transfer16(0x5555);   // Footer
@@ -101,51 +133,59 @@ void qcaspi_write_burst(uint8_t *src, uint32_t len) {
 }
 
 uint32_t qcaspi_read_burst(uint8_t *dst) {
-    uint16_t cmd, available, rxbytes;
+    uint16_t available, rxbytes;
 
     available = qcaspi_read_register16(SPI_REG_RDBUF_BYTE_AVA);
 
     if (available) {
       // Write nr of bytes to read to SPI_REG_BFR_SIZE
       qcaspi_write_register(SPI_REG_BFR_SIZE, available);
-
-      cmd = QCA7K_SPI_READ | QCA7K_SPI_EXTERNAL;
-
+      
       digitalWrite(PIN_QCA700X_CS, LOW);
-      SPI.transfer16(cmd);
+      SPI.transfer16(QCA7K_SPI_READ | QCA7K_SPI_EXTERNAL);
       SPI.transfer(dst, available);
       digitalWrite(PIN_QCA700X_CS, HIGH);
 
-      // we received the data, now remove the header, and footer.
-      rxbytes = dst[8] + (dst[9] << 8);
-      // check if the header exists and a minimum of 60 bytes are available
-      if (dst[4] == 0xaa && dst[5] == 0xaa && dst[6] == 0xaa && dst[7] == 0xaa && rxbytes >= 60) {
-        memcpy(dst, dst+12, rxbytes);
-        Serial.printf("rxbuffer bytes: %u\n", rxbytes);
-        return rxbytes;
-      }
+      return available;   // return nr of bytes in the rxbuffer
     }
     return 0;
 }
 
+
 void setNmkAt(uint16_t index) {
     // sets the Network Membership Key (NMK) at a certain position in the transmit buffer
-    for (uint16_t i=0; i<16; i++) buffer[index+i] = NMK_EVSE[i]; // NMK 
+    for (uint8_t i=0; i<16; i++) buffer[index+i] = NMK_EVSE[i]; // NMK 
 }
 
 void setNidAt(uint16_t index) {
     // copies the network ID (NID, 7 bytes) into the wished position in the transmit buffer
-    for (uint16_t i=0; i<7 ;i++) buffer[index+i] = NID[i];
+    for (uint8_t i=0; i<7; i++) buffer[index+i] = NID[i];
 }
+
+void setMacAt(uint8_t *mac, uint16_t offset) {
+    // at offset 0 in the ethernet frame, we have the destination MAC
+    // at offset 6 in the ethernet frame, we have the source MAC
+    for (uint8_t i=0; i<6; i++) buffer[offset+i]=mac[i];
+}
+
+void setRunId(uint16_t offset) {
+    // at the given offset in the transmit buffer, fill the 8-bytes-RunId.
+    for (uint8_t i=0; i<8; i++) buffer[offset+i]=pevRunId[i];
+}
+
+void setACVarField(uint16_t offset) {
+    for (uint8_t i=0; i<58; i++) buffer[offset+i]=AvgACVar[i];
+}    
 
 uint16_t getManagementMessageType() {
     // calculates the MMTYPE (base value + lower two bits), see Table 11-2 of homeplug spec
     return (rxbuffer[16]<<8) + rxbuffer[15];
 }
 
+
 void composeSetKey() {
     
-    memset(buffer,0x00,100);  // clear buffer
+    memset(buffer,0x00,60);  // clear buffer
     // Destination MAC
     buffer[0]=0x00; 
     buffer[1]=0xB0;
@@ -196,13 +236,68 @@ void composeSetKey() {
     setNmkAt(41); 
 }
 
+void composeSlacParamCnf() {
+
+    memset(buffer,0x00,60);  // clear buffer
+    setMacAt(pevMac, 0);  // Destination MAC
+    setMacAt(myMac, 6);  // Source MAC
+    buffer[12]=0x88; // Protocol HomeplugAV
+    buffer[13]=0xE1;
+    buffer[14]=0x01; // version
+    buffer[15]=0x65; // SLAC_PARAM.CNF
+    buffer[16]=0x60; // 
+    buffer[17]=0x00; // 2 bytes fragmentation information. 0000 means: unfragmented.
+    buffer[18]=0x00; // 
+    buffer[19]=0xff; // 19-24 sound target
+    buffer[20]=0xff; 
+    buffer[21]=0xff; 
+    buffer[22]=0xff; 
+    buffer[23]=0xff; 
+    buffer[24]=0xff; 
+    buffer[25]=0x0A; // sound count
+    buffer[26]=0x06; // timeout
+    buffer[27]=0x01; // resptype
+    setMacAt(pevMac, 28);  // forwarding_sta, same as PEV MAC, plus 2 bytes 00 00
+    buffer[34]=0x00; // 
+    buffer[35]=0x00; // 
+    setRunId(36);  // 36 to 43 runid 8 bytes 
+    // rest is 00
+}
+
+ void composeAttenCharInd() {
+    
+    memset(buffer,0x00,130);  // clear buffer
+    setMacAt(pevMac, 0);  // Destination MAC
+    setMacAt(myMac, 6);  // Source MAC
+    buffer[12]=0x88; // Protocol HomeplugAV
+    buffer[13]=0xE1;
+    buffer[14]=0x01; // version
+    buffer[15]=0x6E; // ATTEN_CHAR.IND
+    buffer[16]=0x60;  
+    buffer[17]=0x00; // 2 bytes fragmentation information. 0000 means: unfragmented.
+    buffer[18]=0x00; // 
+    buffer[19]=0x00; // apptype
+    buffer[20]=0x00; // security
+    setMacAt(pevMac, 21); // The wireshark calls it source_mac, but alpitronic fills it with PEV mac. We use the PEV MAC.
+    setRunId(27); // runid 8 bytes 
+    buffer[35]=0x00; //35 - 51 source_id, 17 bytes. The alpitronic fills it with 00
+        
+    buffer[52]=0x00; // 52 - 68 response_id, 17 bytes. The alpitronic fills it with 00.
+    
+    buffer[69]=ReceivedSounds; // Number of sounds. 10 in normal case. 
+    buffer[70]=0x3A; // Number of groups = 58. Should this be more flexible?
+    
+    setACVarField(71); // 71 to 128: The group attenuation for the 58 announced groups.
+ }
+
 // Task
 // 
-// called every 100ms
+// called every 20ms
 //
-void Timer100ms(void * parameter) {
+void Timer20ms(void * parameter) {
 
-  uint16_t reg16, mnt, x;
+  uint16_t reg16, rxbytes, mnt, x;
+  
 
   while(1)  // infinite loop
   {
@@ -221,6 +316,7 @@ void Timer100ms(void * parameter) {
         reg16 = qcaspi_read_register16(SPI_REG_WRBUF_SPC_AVA);
         if (reg16 == 3163) {
           Serial.printf("QCA700X write space ok\n"); 
+
           modem_state = MODEM_CM_SET_KEY_REQ;
         }  
         break;
@@ -236,35 +332,105 @@ void Timer100ms(void * parameter) {
 
       case MODEM_CM_SET_KEY_CNF:
       case MODEM_CONFIGURED:
+      case SLAC_PARAM_CNF:
+      case MNBC_SOUND:
+      case ATTEN_CHAR_IND:
         reg16 = qcaspi_read_burst(rxbuffer);
-        mnt = getManagementMessageType();
 
-        if (reg16) {
-          for (x=0; x<reg16; x++) Serial.printf("%02x ",rxbuffer[x]);
-          Serial.printf("\n");
+        while (reg16) {
+          // we received data, read the length of the first packet.
+          rxbytes = rxbuffer[8] + (rxbuffer[9] << 8);
+          
+          // check if the header exists and a minimum of 60 bytes are available
+          if (rxbuffer[4] == 0xaa && rxbuffer[5] == 0xaa && rxbuffer[6] == 0xaa && rxbuffer[7] == 0xaa && rxbytes >= 60) {
+            // now remove the header, and footer.
+            memcpy(rxbuffer, rxbuffer+12, reg16-14);
+            //Serial.printf("available: %u rxbuffer bytes: %u\n",reg16, rxbytes);
+        
+            mnt = getManagementMessageType();
+          
+            for (x=0; x<rxbytes; x++) Serial.printf("%02x ",rxbuffer[x]);
+            Serial.printf("\n");
 
-          if (mnt == (CM_SET_KEY + MMTYPE_CNF)) {
-            Serial.printf("received SET_KEY.CNF\n");
-            if (rxbuffer[19] == 0x01) {
-              modem_state = MODEM_CONFIGURED;
-              Serial.printf("NMK set\n");
-            } else Serial.printf("NMK -NOT- set\n");
-          } else if (mnt == (CM_SLAC_PARAM + MMTYPE_REQ)) {
-            Serial.printf("received CM_SLAC_PARAM.REQ\n");
+            if (mnt == (CM_SET_KEY + MMTYPE_CNF)) {
+              Serial.printf("received SET_KEY.CNF\n");
+              if (rxbuffer[19] == 0x01) {
+                modem_state = MODEM_CONFIGURED;
+                for (x=0; x<6; x++) myMac[x] = rxbuffer[x];   // copy mac from the EVSE modem to myMac
+                Serial.printf("NMK set\n");
+              } else Serial.printf("NMK -NOT- set\n");
 
+            } else if (mnt == (CM_SLAC_PARAM + MMTYPE_REQ)) {
+              // We received a SLAC_PARAM request from the PEV. This is the initiation of a SLAC procedure.
+              // We extract the pev MAC from it.
+              Serial.printf("received CM_SLAC_PARAM.REQ\n");
+              for (x=0; x<6; x++) pevMac[x] = rxbuffer[6+x];
+              // extract the RunId from the SlacParamReq, and store it for later use
+              for (x=0; x<8; x++) pevRunId[x] = rxbuffer[21+x];
+              // We are EVSE, we want to answer.
+              composeSlacParamCnf();
+              // Send data to modem
+              qcaspi_write_burst(buffer, 60);
+              modem_state = SLAC_PARAM_CNF;
+              Serial.printf("transmitting CM_SLAC_PARAM.CNF\n");
+
+            } else if (mnt == (CM_START_ATTEN_CHAR + MMTYPE_IND) && modem_state == SLAC_PARAM_CNF) {
+              Serial.printf("received CM_START_ATTEN_CHAR.IND\n");
+              SoundsTimer = millis();        // start timer
+              for (x=0; x<58; x++) AvgACVar[x] = 0; // reset averages.
+              ReceivedSounds = 0;
+              modem_state = MNBC_SOUND;
+      
+            } else if (mnt == (CM_MNBC_SOUND + MMTYPE_IND) && modem_state == MNBC_SOUND) { 
+              Serial.printf("received CM_MNBC_SOUND.IND\n");
+              ReceivedSounds++;
+
+            } else if (mnt == (CM_ATTEN_PROFILE + MMTYPE_IND) && modem_state == MNBC_SOUND) { 
+              Serial.printf("received CM_ATTEN_PROFILE.IND\n");
+              for (x=0; x<58; x++) AvgACVar[x] += rxbuffer[27+x];
+              
+              if (ReceivedSounds == 10) {
+                Serial.printf("Start Average Calculation\n");
+                for (x=0; x<58; x++) AvgACVar[x] = AvgACVar[x] / ReceivedSounds;
+              }  
+
+            } 
+
+            //Serial.printf("remaining reg16: %i\n",(int16_t)reg16-rxbytes-14);
+            // there might be more data still in the buffer. Check if there is another packet.
+            if ((int16_t)reg16-rxbytes-14 >= 74) {
+              reg16 = reg16-rxbytes-14;
+              // move data forward.
+              memcpy(rxbuffer, rxbuffer+2+rxbytes, reg16);
+            } else reg16 = 0;
+            
           }
-        }
+
+        } // while(reg16)
         break;
 
       default:
         break;
     }
 
-    // Pause the task for 100ms
-    vTaskDelay(100 / portTICK_PERIOD_MS);
+    // Did the Sound timer expire?
+    if (modem_state == MNBC_SOUND && (SoundsTimer + 600) < millis() ) {
+      Serial.printf("SOUND timer expired\n");
+      // Send CM_ATTEN_CHAR_IND, even if no Sounds were received.
+      composeAttenCharInd();
+      // Send data to modem
+      qcaspi_write_burst(buffer, 129);
+      modem_state = ATTEN_CHAR_IND;
+      Serial.printf("transmitting CM_ATTEN_CHAR.IND\n");
+    }
+
+
+    // Pause the task for 20ms
+    vTaskDelay(20 / portTICK_PERIOD_MS);
 
   } // while(1)
 }    
+
 
 void setup() {
 
@@ -280,14 +446,15 @@ void setup() {
     SPI.begin(SPI_SCK, SPI_MISO, SPI_MOSI, PIN_QCA700X_CS);
     // SPI mode is MODE3 (Idle = HIGH, clock in on rising edge), we use a 10Mhz SPI clock
     SPI.beginTransaction(SPISettings(10000000, MSBFIRST, SPI_MODE3));
-    
+    //attachInterrupt(digitalPinToInterrupt(PIN_QCA700X_INT), SPI_InterruptHandler, RISING);
+
     Serial.begin();
     Serial.printf("\npowerup\n");
 
-    // Create Task 100ms Timer
+    // Create Task 20ms Timer
     xTaskCreate(
-        Timer100ms,     // Function that should be called
-        "Timer100ms",   // Name of the task (for debugging)
+        Timer20ms,      // Function that should be called
+        "Timer20ms",    // Name of the task (for debugging)
         3072,           // Stack size (bytes)                              
         NULL,           // Parameter to pass
         1,              // Task priority
