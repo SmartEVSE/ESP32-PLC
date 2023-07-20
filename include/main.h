@@ -26,6 +26,7 @@
 #define SPI_REG_ACTION_CTRL     0x1B00
 
 #define QCASPI_GOOD_SIGNATURE   0xAA55
+#define QCA7K_BUFFER_SIZE       3163
 
 #define SPI_INT_WRBUF_BELOW_WM (1 << 10)
 #define SPI_INT_CPU_ON         (1 << 6)
@@ -33,6 +34,10 @@
 #define SPI_INT_WRBUF_ERR      (1 << 2)
 #define SPI_INT_RDBUF_ERR      (1 << 1)
 #define SPI_INT_PKT_AVLBL      (1 << 0)
+
+/*====================================================================*
+ *   States
+ *--------------------------------------------------------------------*/
 
 #define MODEM_POWERUP 0
 #define MODEM_WRITESPACE 1
@@ -45,6 +50,14 @@
 #define ATTEN_CHAR_RSP 50
 #define SLAC_MATCH_REQ 60
 
+#define MODEM_GET_SW_REQ 100
+#define MODEM_WAIT_SW 110
+#define MODEM_LINK_READY 120
+
+
+/*====================================================================*
+ *   SLAC commands
+ *--------------------------------------------------------------------*/
 
 #define CM_SET_KEY 0x6008
 #define CM_GET_KEY 0x600C
@@ -78,3 +91,17 @@
 #define MMTYPE_CNF 0x0001   // confirmation = +1
 #define MMTYPE_IND 0x0002
 #define MMTYPE_RSP 0x0003
+
+// Frametypes
+
+#define FRAME_IPV6 0x86DD
+#define FRAME_HOMEPLUG 0x88E1
+
+/* V2GTP */
+#define V2GTP_HEADER_SIZE 8 /* header has 8 bytes */
+
+extern uint8_t txbuffer[], rxbuffer[];
+extern uint8_t myMac[];
+extern uint8_t pevMac[];
+void qcaspi_write_burst(uint8_t *src, uint32_t len);
+void setMacAt(uint8_t *mac, uint16_t offset);
