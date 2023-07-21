@@ -12,3 +12,4 @@ Work in Progress
 - TCP connection from the car to the EVSE is set up.
 - Car starts sending EXI encoded messages over TCP.
 - First exi encoded message is decoded, and tells us what charging options the car supports. We only support DIN for now.
+- Checkpoint403: Schema negotiated.
