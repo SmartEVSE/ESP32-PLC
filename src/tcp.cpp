@@ -1,6 +1,7 @@
 #include <Arduino.h>
 #include "main.h"
 #include "ipv6.h"
+#include "tcp.h"
 #include "src/exi/projectExiConnector.h"
 
 /* Todo: implement a retry strategy, to cover the situation that single packets are lost on the way. */
@@ -12,8 +13,9 @@
 #define TCP_FLAG_ACK 0x10
 
 uint8_t tcpHeaderLen;
+#define TCP_PAYLOAD_LEN 200
 uint8_t tcpPayloadLen;
-//uint8_t tcpPayload[TCP_PAYLOAD_LEN];
+uint8_t tcpPayload[TCP_PAYLOAD_LEN];
 
 
 #define TCP_ACTIVITY_TIMER_START (5*33) /* 5 seconds */
@@ -56,6 +58,49 @@ void routeDecoderInputData(void) {
 }
 
 
+void tcp_transmit(void) {
+  //showAsHex(tcpPayload, tcpPayloadLen, "tcp_transmit");
+  if (tcpState == TCP_STATE_ESTABLISHED) {  
+    //addToTrace("[TCP] sending data");
+    tcpHeaderLen = 20; /* 20 bytes normal header, no options */
+    if (tcpPayloadLen+tcpHeaderLen < TCP_TRANSMIT_PACKET_LEN) {    
+      memcpy(&TcpTransmitPacket[tcpHeaderLen], tcpPayload, tcpPayloadLen);
+      tcp_prepareTcpHeader(TCP_FLAG_PSH + TCP_FLAG_ACK); /* data packets are always sent with flags PUSH and ACK. */
+      tcp_packRequestIntoIp();
+    } else {
+      Serial.printf("Error: tcpPayload and header do not fit into TcpTransmitPacket.\n");
+    }      
+  }  
+}
+
+
+void addV2GTPHeaderAndTransmit(const uint8_t *exiBuffer, uint8_t exiBufferLen) {
+    // takes the bytearray with exidata, and adds a header to it, according to the Vehicle-to-Grid-Transport-Protocol
+    // V2GTP header has 8 bytes
+    // 1 byte protocol version
+    // 1 byte protocol version inverted
+    // 2 bytes payload type
+    // 4 byte payload length
+    tcpPayload[0] = 0x01; // version
+    tcpPayload[1] = 0xfe; // version inverted
+    tcpPayload[2] = 0x80; // payload type. 0x8001 means "EXI data"
+    tcpPayload[3] = 0x01; // 
+    tcpPayload[4] = (uint8_t)(exiBufferLen >> 24); // length 4 byte.
+    tcpPayload[5] = (uint8_t)(exiBufferLen >> 16);
+    tcpPayload[6] = (uint8_t)(exiBufferLen >> 8);
+    tcpPayload[7] = (uint8_t)exiBufferLen;
+    if (exiBufferLen+8 < TCP_PAYLOAD_LEN) {
+        memcpy(tcpPayload+8, exiBuffer, exiBufferLen);
+        tcpPayloadLen = 8 + exiBufferLen; /* 8 byte V2GTP header, plus the EXI data */
+        //log_v("Step3 %d", tcpPayloadLen);
+        //showAsHex(tcpPayload, tcpPayloadLen, "tcpPayload");
+        tcp_transmit();
+    } else {
+        Serial.printf("Error: EXI does not fit into tcpPayload.\n");
+    }
+}
+
+
 void decodeV2GTP(void) {
 
     uint16_t arrayLen, i;
@@ -85,6 +130,7 @@ void decodeV2GTP(void) {
             if (strstr((const char*)strNamespace, ":din:70121:") != NULL) {
                 Serial.printf("Detected DIN\n");
                 projectExiConnector_encode_appHandExiDocument(SchemaID); // test
+                addV2GTPHeaderAndTransmit(global_streamEnc.data, global_streamEncPos);
             }
         }
     }
@@ -294,13 +340,15 @@ void evaluateTcpPacket(void) {
         /* This is a data transfer packet. */
         // flag bit PSH should also be set.
         tcp_rxdataLen = tmpPayloadLen;
+        TcpAckNr = remoteSeqNr + tcp_rxdataLen; // The ACK number of our next transmit packet is tcp_rxdataLen more than the received seq number.
+        TcpSeqNr = remoteAckNr;                 // tcp_rxdatalen will be cleared later.        
         /* rxbuffer[74] is the first payload byte. */
         memcpy(tcp_rxdata, rxbuffer+74, tcp_rxdataLen);  /* provide the received data to the application */
         //     connMgr_TcpOk();
+        tcp_sendAck();  // Send Ack, then process data
+
         decodeV2GTP();
-        TcpAckNr = remoteSeqNr + tcp_rxdataLen; /* The ACK number of our next transmit packet is tcp_rxdataLen more than the received seq number. */
-        TcpSeqNr = remoteAckNr;
-        tcp_sendAck();
+                
         return;
     }
 
