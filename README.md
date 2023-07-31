@@ -13,3 +13,4 @@ Work in Progress
 - Car starts sending EXI encoded messages over TCP.
 - First exi encoded message is decoded, and tells us what charging options the car supports. We only support DIN for now.
 - Checkpoint403: Schema negotiated.
+- Up to 'ChargeParameterDiscoveryRequest' which allows us to read the SoC of the car.
