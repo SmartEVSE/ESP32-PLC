@@ -50,6 +50,8 @@ unsigned long SoundsTimer = 0;
 unsigned long ModemSearchTimer = 0;
 uint8_t ModemsFound = 0;
 uint8_t ReceivedSounds = 0;
+uint8_t EVCCID[6];  // Mac address or ID from the PEV, used in V2G communication
+uint8_t EVSOC = 0;  // State Of Charge of the EV, obtained from the 'ContractAuthenticationRequest' message
 
 
 void SPI_InterruptHandler() { // Interrupt handler is currently unused

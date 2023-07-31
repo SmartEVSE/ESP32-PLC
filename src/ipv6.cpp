@@ -235,7 +235,7 @@ void sendSdpResponse() {
     V2GFrame[5] = (lenSdp >> 16) & 0xff;
     V2GFrame[6] = (lenSdp >> 8) & 0xff;
     V2GFrame[7] = lenSdp & 0xff;
-    memcpy(V2GFrame+8, SdpPayload, lenSdp);
+    memcpy(V2GFrame+8, SdpPayload, lenSdp);         // ToDo: Check lenSdp against buffer size!
     v2gFrameLen = lenSdp + 8;
     packResponseIntoUdp();
 }
@@ -380,7 +380,7 @@ void IPv6Manager(uint16_t rxbytes) {
     uint16_t nextheader; 
     uint8_t icmpv6type; 
 
-    Serial.printf("[RX] ");
+    Serial.printf("\n[RX] ");
     for (x=0; x<rxbytes; x++) Serial.printf("%02x",rxbuffer[x]);
     Serial.printf("\n");
 
