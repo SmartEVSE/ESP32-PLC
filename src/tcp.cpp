@@ -121,41 +121,46 @@ void decodeV2GTP(void) {
     uint8_t SchemaID, n;
     uint16_t NamespaceLen;
 
+
+    routeDecoderInputData();
+    if (fsmState) projectExiConnector_decode_DinExiDocument();      // Decode DIN EXI
+    else projectExiConnector_decode_appHandExiDocument();           // Decode Handshake EXI (on first state only)
+    tcp_rxdataLen = 0; /* mark the input data as "consumed" */
+
     if (fsmState == stateWaitForSupportedApplicationProtocolRequest) {
 
-        routeDecoderInputData();
-        projectExiConnector_decode_appHandExiDocument();    // Decode Handshake EXI
-        tcp_rxdataLen = 0; /* mark the input data as "consumed" */
-        // process data when no errors occured during decoding
-        if (g_errn == 0) {
-            arrayLen = aphsDoc.supportedAppProtocolReq.AppProtocol.arrayLen;
-            Serial.printf("The car supports %u schemas.\n", arrayLen);
+        // Check if we have received the correct message
+        if (aphsDoc.supportedAppProtocolReq_isUsed) {
         
-            // check all schemas for DIN
-            for(n=0; n<arrayLen; n++) {
-                memset(strNamespace, 0, sizeof(strNamespace));
-                NamespaceLen = aphsDoc.supportedAppProtocolReq.AppProtocol.array[n].ProtocolNamespace.charactersLen;
-                SchemaID = aphsDoc.supportedAppProtocolReq.AppProtocol.array[n].SchemaID;
-                for (i=0; i< NamespaceLen; i++) {
-                    strNamespace[i] = aphsDoc.supportedAppProtocolReq.AppProtocol.array[n].ProtocolNamespace.characters[i];    
-                }
-                Serial.printf("strNameSpace %s SchemaID: %u\n", strNamespace, SchemaID);
+            Serial.printf("SupportedApplicationProtocolRequest\n");
+            // process data when no errors occured during decoding
+            if (g_errn == 0) {
+                arrayLen = aphsDoc.supportedAppProtocolReq.AppProtocol.arrayLen;
+                Serial.printf("The car supports %u schemas.\n", arrayLen);
+            
+                // check all schemas for DIN
+                for(n=0; n<arrayLen; n++) {
+                    memset(strNamespace, 0, sizeof(strNamespace));
+                    NamespaceLen = aphsDoc.supportedAppProtocolReq.AppProtocol.array[n].ProtocolNamespace.charactersLen;
+                    SchemaID = aphsDoc.supportedAppProtocolReq.AppProtocol.array[n].SchemaID;
+                    for (i=0; i< NamespaceLen; i++) {
+                        strNamespace[i] = aphsDoc.supportedAppProtocolReq.AppProtocol.array[n].ProtocolNamespace.characters[i];    
+                    }
+                    Serial.printf("strNameSpace %s SchemaID: %u\n", strNamespace, SchemaID);
 
-                if (strstr((const char*)strNamespace, ":din:70121:") != NULL) {
-                    Serial.printf("Detected DIN\n");
-                    projectExiConnector_encode_appHandExiDocument(SchemaID); // test
-                    // Send supportedAppProtocolRes to EV
-                    addV2GTPHeaderAndTransmit(global_streamEnc.data, global_streamEncPos);
-                    fsmState = stateWaitForSessionSetupRequest;
+                    if (strstr((const char*)strNamespace, ":din:70121:") != NULL) {
+                        Serial.printf("Detected DIN\n");
+                        projectExiConnector_encode_appHandExiDocument(SchemaID); // test
+                        // Send supportedAppProtocolRes to EV
+                        addV2GTPHeaderAndTransmit(global_streamEnc.data, global_streamEncPos);
+                        fsmState = stateWaitForSessionSetupRequest;
+                    }
                 }
             }
         }
+
     } else if (fsmState == stateWaitForSessionSetupRequest) {
         
-        routeDecoderInputData();
-        projectExiConnector_decode_DinExiDocument();      // Decode EXI
-        tcp_rxdataLen = 0; /* mark the input data as "consumed" */
-                
         // Check if we have received the correct message
         if (dinDocDec.V2G_Message.Body.SessionSetupReq_isUsed) {
 
@@ -174,14 +179,14 @@ void decodeV2GTP(void) {
             }
             Serial.printf("\n");
             
+            sessionId[0] = 1;   // our SessionId is set up here, and used by _prepare_DinExiDocument
+            sessionId[1] = 2;   // This SessionID will be used by the EV in future communication
+            sessionId[2] = 3;
+            sessionId[3] = 4;
+            sessionIdLen = 4;
+
             // Now prepare the 'SessionSetupResponse' message to send back to the EV
             projectExiConnector_prepare_DinExiDocument();
-            // This SessionID will be used by the EV in future communication
-            dinDocEnc.V2G_Message.Header.SessionID.bytes[0] = 1;
-            dinDocEnc.V2G_Message.Header.SessionID.bytes[1] = 2;
-            dinDocEnc.V2G_Message.Header.SessionID.bytes[2] = 3;
-            dinDocEnc.V2G_Message.Header.SessionID.bytes[3] = 4;
-            dinDocEnc.V2G_Message.Header.SessionID.bytesLen = 4;
             
             dinDocEnc.V2G_Message.Body.SessionSetupRes_isUsed = 1;
             init_dinSessionSetupResType(&dinDocEnc.V2G_Message.Body.SessionSetupRes);
@@ -199,9 +204,7 @@ void decodeV2GTP(void) {
         
     } else if (fsmState == stateWaitForServiceDiscoveryRequest) {
 
-        routeDecoderInputData();
-        projectExiConnector_decode_DinExiDocument();      // Decode EXI
-        tcp_rxdataLen = 0; /* mark the input data as "consumed" */
+
                 
         // Check if we have received the correct message
         if (dinDocDec.V2G_Message.Body.ServiceDiscoveryReq_isUsed) {
@@ -212,16 +215,8 @@ void decodeV2GTP(void) {
             for (i=0; i<n; i++) Serial.printf("%02x", dinDocDec.V2G_Message.Header.SessionID.bytes[i] );
             Serial.printf("\n");
             
-
-
             // Now prepare the 'ServiceDiscoveryResponse' message to send back to the EV
             projectExiConnector_prepare_DinExiDocument();
-            // The SessionID
-            dinDocEnc.V2G_Message.Header.SessionID.bytes[0] = 1;
-            dinDocEnc.V2G_Message.Header.SessionID.bytes[1] = 2;
-            dinDocEnc.V2G_Message.Header.SessionID.bytes[2] = 3;
-            dinDocEnc.V2G_Message.Header.SessionID.bytes[3] = 4;
-            dinDocEnc.V2G_Message.Header.SessionID.bytesLen = 4;
             
             dinDocEnc.V2G_Message.Body.ServiceDiscoveryRes_isUsed = 1;
             init_dinServiceDiscoveryResType(&dinDocEnc.V2G_Message.Body.ServiceDiscoveryRes);
@@ -270,13 +265,7 @@ void decodeV2GTP(void) {
 
                 // Now prepare the 'ServicePaymentSelectionResponse' message to send back to the EV
                 projectExiConnector_prepare_DinExiDocument();
-                // The SessionID
-                dinDocEnc.V2G_Message.Header.SessionID.bytes[0] = 1;
-                dinDocEnc.V2G_Message.Header.SessionID.bytes[1] = 2;
-                dinDocEnc.V2G_Message.Header.SessionID.bytes[2] = 3;
-                dinDocEnc.V2G_Message.Header.SessionID.bytes[3] = 4;
-                dinDocEnc.V2G_Message.Header.SessionID.bytesLen = 4;
-                
+                 
                 dinDocEnc.V2G_Message.Body.ServicePaymentSelectionRes_isUsed = 1;
                 init_dinServicePaymentSelectionResType(&dinDocEnc.V2G_Message.Body.ServicePaymentSelectionRes);
 
@@ -302,13 +291,7 @@ void decodeV2GTP(void) {
 
             // Now prepare the 'ContractAuthenticationResponse' message to send back to the EV
             projectExiConnector_prepare_DinExiDocument();
-            // The SessionID
-            dinDocEnc.V2G_Message.Header.SessionID.bytes[0] = 1;
-            dinDocEnc.V2G_Message.Header.SessionID.bytes[1] = 2;
-            dinDocEnc.V2G_Message.Header.SessionID.bytes[2] = 3;
-            dinDocEnc.V2G_Message.Header.SessionID.bytes[3] = 4;
-            dinDocEnc.V2G_Message.Header.SessionID.bytesLen = 4;
-            
+                        
             dinDocEnc.V2G_Message.Body.ContractAuthenticationRes_isUsed = 1;
             // Set Authorisation immediately to 'Finished'.
             dinDocEnc.V2G_Message.Body.ContractAuthenticationRes.EVSEProcessing = dinEVSEProcessingType_Finished;
@@ -339,12 +322,6 @@ void decodeV2GTP(void) {
 
             // Now prepare the 'ChargeParameterDiscoveryResponse' message to send back to the EV
             projectExiConnector_prepare_DinExiDocument();
-            // The SessionID
-            dinDocEnc.V2G_Message.Header.SessionID.bytes[0] = 1;
-            dinDocEnc.V2G_Message.Header.SessionID.bytes[1] = 2;
-            dinDocEnc.V2G_Message.Header.SessionID.bytes[2] = 3;
-            dinDocEnc.V2G_Message.Header.SessionID.bytes[3] = 4;
-            dinDocEnc.V2G_Message.Header.SessionID.bytesLen = 4;
             
             dinDocEnc.V2G_Message.Body.ChargeParameterDiscoveryRes_isUsed = 1;   
             init_dinChargeParameterDiscoveryResType(&dinDocEnc.V2G_Message.Body.ChargeParameterDiscoveryRes);
